@@ -132,7 +132,7 @@
  *
  */
 #ifndef UART_RX_BUFFER_SIZE
-#define UART_RX_BUFFER_SIZE 512
+#define UART_RX_BUFFER_SIZE 2048
 #endif
 
 /**
