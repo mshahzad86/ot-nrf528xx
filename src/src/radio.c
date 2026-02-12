@@ -65,6 +65,8 @@
 #include <openthread/config.h>
 #include <openthread/random_noncrypto.h>
 
+#include <nrf_802154_frame_parser.h>
+
 // clang-format off
 
 #define SHORT_ADDRESS_SIZE    2            ///< Size of MAC short address.
@@ -139,16 +141,21 @@ typedef enum
 static uint32_t sPendingEvents;
 
 #if OPENTHREAD_CONFIG_THREAD_VERSION >= OT_THREAD_VERSION_1_2
-static uint32_t         sMacFrameCounter;
-static uint32_t         sPrevMacFrameCounter;
-static uint8_t          sKeyId;
-static otMacKeyMaterial sPrevKey;
-static otMacKeyMaterial sCurrKey;
-static otMacKeyMaterial sNextKey;
-static bool             sAckedWithSecEnhAck;
-static uint32_t         sAckFrameCounter;
-static uint8_t          sAckKeyId;
+static uint32_t              sMacFrameCounter;
+static uint32_t              sPrevMacFrameCounter;
+static uint8_t               sKeyId;
+static otMacKeyMaterial      sPrevKey;
+static otMacKeyMaterial      sCurrKey;
+static otMacKeyMaterial      sNextKey;
+static bool                  sAckedWithSecEnhAck;
+static uint32_t              sAckFrameCounter;
+static uint8_t               sAckKeyId;
+static otPanIdKeyMaterialMap sPanIdKeyMaterials;
 #endif
+
+static uint8_t  sMaxPanKeys = 64
+static uint16_t sPanIdList[sMaxPanKeys];  // Array to store up to 64 PAN IDs
+static uint8_t  sPanIdCount = 0; // Current count of stored PAN IDs
 
 static int8_t GetTransmitPowerForChannel(uint8_t aChannel)
 {
@@ -192,6 +199,8 @@ static void dataInit(void)
     memset(&sAckFrame, 0, sizeof(sAckFrame));
 
     sPrevMacFrameCounter = 0;
+
+    memset(&sPanIdKeyMaterials, 0, sizeof(sPanIdKeyMaterials));
 }
 
 static void convertShortAddress(uint8_t *aTo, uint16_t aFrom)
@@ -257,11 +266,12 @@ static inline void clearPendingEvents(void)
 }
 
 #if OPENTHREAD_CONFIG_THREAD_VERSION >= OT_THREAD_VERSION_1_2
-static void txAckProcessSecurity(uint8_t *aAckFrame)
+static void txAckProcessSecurity(uint8_t *aAckFrame, uint16_t panId)
 {
     otRadioFrame      ackFrame;
     otMacKeyMaterial *key = NULL;
     uint8_t           keyId;
+    uint8_t           selectedIndex = 0;
 
     sAckedWithSecEnhAck = false;
     otEXPECT(aAckFrame[SECURITY_ENABLED_OFFSET] & SECURITY_ENABLED_BIT);
@@ -274,19 +284,29 @@ static void txAckProcessSecurity(uint8_t *aAckFrame)
 
     otEXPECT(otMacFrameIsKeyIdMode1(&ackFrame) && keyId != 0);
 
+    // Select PAN index from stored map
+    for (uint8_t i = 0; i < kMaxPanKeys; i++)
+    {
+        if (sPanIdKeyMaterials[i].panId == panId)
+        {
+            selectedIndex = i;
+            break;
+        }
+    }
+
     if (keyId == sKeyId)
     {
-        key              = &sCurrKey;
+        key              = &sPanIdKeyMaterials[selectedIndex].curMacKey;
         sAckFrameCounter = sMacFrameCounter++;
     }
     else if (keyId == sKeyId - 1)
     {
-        key              = &sPrevKey;
+        key              = &sPanIdKeyMaterials[selectedIndex].curMacKey;
         sAckFrameCounter = sPrevMacFrameCounter++;
     }
     else if (keyId == sKeyId + 1)
     {
-        key = &sNextKey;
+        key              = &sPanIdKeyMaterials[selectedIndex].curMacKey;
         // Openthread does not maintain future frame counter.
         // Mac frame counter would be overwritten after key rotation leading to
         // frames being dropped due to counter value lower than in acks.
@@ -338,6 +358,22 @@ void otPlatRadioSetPanId(otInstance *aInstance, uint16_t aPanId)
 
     uint8_t address[SHORT_ADDRESS_SIZE];
     convertShortAddress(address, aPanId);
+
+    // Add PAN ID to list if not already present
+    bool found = false;
+    for (uint8_t i = 0; i < sPanIdCount; i++)
+    {
+        if (sPanIdList[i] == aPanId)
+        {
+            found = true;
+            break;
+        }
+    }
+
+    if (!found && sPanIdCount <= sMaxPanKeys)
+    {
+        sPanIdList[sPanIdCount++] = aPanId;
+    }
 
     nrf_802154_pan_id_set(address);
 }
@@ -1064,7 +1100,18 @@ static uint16_t getCslPhase()
 
 void nrf_802154_tx_ack_started(uint8_t *p_data, int8_t power, uint8_t lqi)
 {
-    otRadioFrame ackFrame;
+    otRadioFrame                       ackFrame;
+    bool                               result;
+    nrf_802154_frame_parser_mhr_data_t mhr_data;
+    uint16_t                           pan_id = 0;
+
+    result = nrf_802154_frame_parser_mhr_parse(p_data, &mhr_data);
+    if (result && mhr_data.p_dst_panid != NULL)
+    {
+        // p_dst_panid points to little-endian PAN ID field within p_data
+        pan_id = (uint16_t)mhr_data.p_dst_panid[0] | ((uint16_t)mhr_data.p_dst_panid[1] << 8);
+    }
+
 #if OPENTHREAD_CONFIG_MLE_LINK_METRICS_SUBJECT_ENABLE
     uint8_t      linkMetricsDataLen = 0;
     uint8_t      linkMetricsData[OT_ENH_PROBING_IE_DATA_MAX_SIZE];
@@ -1099,7 +1146,7 @@ void nrf_802154_tx_ack_started(uint8_t *p_data, int8_t power, uint8_t lqi)
     }
 #endif
 
-    txAckProcessSecurity(p_data);
+    txAckProcessSecurity(p_data, pan_id);
 #endif
 }
 
@@ -1207,7 +1254,26 @@ void nrf_802154_tx_started(const uint8_t *aFrame)
     otEXPECT(otMacFrameIsSecurityEnabled(&sTransmitFrame) && otMacFrameIsKeyIdMode1(&sTransmitFrame) &&
              !sTransmitFrame.mInfo.mTxInfo.mIsSecurityProcessed);
 
-    sTransmitFrame.mInfo.mTxInfo.mAesKey = &sCurrKey;
+    // Select per-PAN AES key for transmit based on destination PAN ID
+
+    nrf_802154_frame_parser_mhr_data_t mhr_data;
+    uint8_t                            selectedIndex = 0;
+
+    if (nrf_802154_frame_parser_mhr_parse(aFrame, &mhr_data) && mhr_data.p_dst_panid != NULL)
+    {
+        uint16_t panId = (uint16_t)mhr_data.p_dst_panid[0] | ((uint16_t)mhr_data.p_dst_panid[1] << 8);
+
+        for (uint8_t i = 0; i < sMaxPanKeys; i++)
+        {
+            if (sPanIdKeyMaterials[i].panId == panId)
+            {
+                selectedIndex = i;
+                break;
+            }
+        }
+    }
+
+    sTransmitFrame.mInfo.mTxInfo.mAesKey = &sPanIdKeyMaterials[selectedIndex].curMacKey;
 
     processSecurity = true;
 #endif // OPENTHREAD_CONFIG_THREAD_VERSION >= OT_THREAD_VERSION_1_2
@@ -1263,6 +1329,33 @@ void otPlatRadioSetMacKey(otInstance             *aInstance,
     sPrevKey             = *aPrevKey;
     sCurrKey             = *aCurrKey;
     sNextKey             = *aNextKey;
+    sPrevMacFrameCounter = sMacFrameCounter;
+
+    CRITICAL_REGION_EXIT();
+}
+
+void otPlatRadioSetMacKeyMap(otInstance           *aInstance,
+                          uint8_t               aKeyIdMode,
+                          uint8_t               aKeyId,
+                          otPanIdKeyMaterialMap aPanIdKeyMaterials,
+                          otRadioKeyType        aKeyType)
+{
+    OT_UNUSED_VARIABLE(aInstance);
+    OT_UNUSED_VARIABLE(aKeyType);
+
+    assert(aKeyType == OT_KEY_TYPE_LITERAL_KEY);
+
+    CRITICAL_REGION_ENTER();
+
+    // Store the Multi-PAN key map for later use
+    sKeyId = aKeyId;
+
+    // Persist the full PAN ID -> KeyMaterial map
+    for (uint8_t i = 0; i < sMaxPanKeys; i++)
+    {
+        sPanIdKeyMaterials[i] = aPanIdKeyMaterials[i];
+    }
+    
     sPrevMacFrameCounter = sMacFrameCounter;
 
     CRITICAL_REGION_EXIT();

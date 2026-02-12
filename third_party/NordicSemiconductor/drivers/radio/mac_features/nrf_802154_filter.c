@@ -311,8 +311,7 @@ static bool dst_pan_id_check(const uint8_t * p_panid, uint8_t frame_type)
 {
     bool result;
 
-    if ((0 == memcmp(p_panid, nrf_802154_pib_pan_id_get(), PAN_ID_SIZE)) ||
-        (0 == memcmp(p_panid, BROADCAST_ADDRESS, PAN_ID_SIZE)))
+    if ((0 == memcmp(p_panid, BROADCAST_ADDRESS, PAN_ID_SIZE)) || nrf_802154_pib_pan_id_exists(p_panid))
     {
         result = true;
     }

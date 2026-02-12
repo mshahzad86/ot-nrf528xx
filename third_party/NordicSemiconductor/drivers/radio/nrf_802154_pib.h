@@ -186,6 +186,22 @@ void nrf_802154_pib_cca_cfg_set(const nrf_802154_cca_cfg_t * p_cca_cfg);
  */
 void nrf_802154_pib_cca_cfg_get(nrf_802154_cca_cfg_t * p_cca_cfg);
 
+/**
+ * @brief Gets the list of PAN IDs used by this device.
+ *
+ * @param[out] p_count Pointer to store the number of PAN IDs in the list.
+ * @returns Pointer to the buffer containing the PAN ID list (2 bytes per PAN ID, little-endian).
+ */
+const uint8_t * nrf_802154_pib_pan_id_list_get(uint8_t * p_count);
+
+/**
+ * @brief Checks if a PAN ID exists in the device's PAN ID list.
+ *
+ * @param[in] p_pan_id Pointer to the PAN ID to check (2 bytes, little-endian).
+ * @returns true if the PAN ID exists in the list, false otherwise.
+ */
+bool nrf_802154_pib_pan_id_exists(const uint8_t * p_pan_id);
+
 #ifdef __cplusplus
 }
 #endif

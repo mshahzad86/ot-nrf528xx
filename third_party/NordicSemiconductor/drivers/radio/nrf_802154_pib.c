@@ -34,22 +34,23 @@
  *
  */
 
+#include <stdint.h>
+#include <string.h>
 #include "nrf_802154_pib.h"
+#include "nrf_802154_config.h"
+#include "nrf_802154_const.h"
+#include "nrf_802154_types.h"
 
 #include <assert.h>
 #include <stdbool.h>
-#include <stdint.h>
-#include <string.h>
-
-#include "nrf_802154_config.h"
-#include "nrf_802154_const.h"
 #include "nrf_802154_utils.h"
 #include "fal/nrf_802154_fal.h"
 
 typedef struct
 {
     int8_t               tx_power;                             ///< Transmit power.
-    uint8_t              pan_id[PAN_ID_SIZE];                  ///< Pan Id of this node.
+    uint8_t              pan_id_list[64][PAN_ID_SIZE];         ///< List of PAN IDs (up to 16)
+    uint8_t              pan_id_count;                         ///< Number of PAN IDs in the list
     uint8_t              short_addr[SHORT_ADDRESS_SIZE];       ///< Short Address of this node.
     uint8_t              extended_addr[EXTENDED_ADDRESS_SIZE]; ///< Extended Address of this node.
     nrf_802154_cca_cfg_t cca;                                  ///< CCA mode and thresholds.
@@ -126,8 +127,15 @@ void nrf_802154_pib_init(void)
     m_data.auto_ack    = true;
     m_data.pan_coord   = false;
     m_data.channel     = 11;
+    m_data.pan_id_count = 0;
 
-    memset(m_data.pan_id, 0xff, sizeof(m_data.pan_id));
+    // Initialize all PAN IDs to 0xFFFF (broadcast)
+    for (uint8_t i = 0; i < 16; i++)
+    {
+        m_data.pan_id_list[i][0] = 0xFF;
+        m_data.pan_id_list[i][1] = 0xFF;
+    }
+
     m_data.short_addr[0] = 0xfe;
     m_data.short_addr[1] = 0xff;
     memset(m_data.extended_addr, 0, sizeof(m_data.extended_addr));
@@ -192,12 +200,48 @@ void nrf_802154_pib_tx_power_set(int8_t dbm)
 
 const uint8_t * nrf_802154_pib_pan_id_get(void)
 {
-    return m_data.pan_id;
+    // TODO: Fix this logic, this might be causing the UDP Security issue
+    // Return the first PAN ID in the list
+    return m_data.pan_id_list[0];
 }
 
 void nrf_802154_pib_pan_id_set(const uint8_t * p_pan_id)
 {
-    memcpy(m_data.pan_id, p_pan_id, PAN_ID_SIZE);
+    // Check if PAN ID already exists in the list
+    for (uint8_t i = 0; i < m_data.pan_id_count; i++)
+    {
+        if (memcmp(m_data.pan_id_list[i], p_pan_id, PAN_ID_SIZE) == 0)
+        {
+            return; // PAN ID already exists
+        }
+    }
+
+    // Add new PAN ID if there's space
+    if (m_data.pan_id_count < 16)
+    {
+        memcpy(m_data.pan_id_list[m_data.pan_id_count], p_pan_id, PAN_ID_SIZE);
+        m_data.pan_id_count++;
+    }
+}
+
+// Add new function to get all PAN IDs
+const uint8_t * nrf_802154_pib_pan_id_list_get(uint8_t * p_count)
+{
+    *p_count = m_data.pan_id_count;
+    return (const uint8_t *)m_data.pan_id_list;
+}
+
+// Add new function to check if a PAN ID exists in the list
+bool nrf_802154_pib_pan_id_exists(const uint8_t * p_pan_id)
+{
+    for (uint8_t i = 0; i < m_data.pan_id_count; i++)
+    {
+        if (memcmp(m_data.pan_id_list[i], p_pan_id, PAN_ID_SIZE) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 const uint8_t * nrf_802154_pib_extended_address_get(void)
