@@ -153,8 +153,8 @@ static uint8_t               sAckKeyId;
 static otPanIdKeyMaterialMap sPanIdKeyMaterials;
 #endif
 
-static uint8_t  sMaxPanKeys = 64
-static uint16_t sPanIdList[sMaxPanKeys];  // Array to store up to 64 PAN IDs
+static uint8_t  sMaxPanKeys = 64;
+static uint16_t sPanIdList[64];  // Array to store up to 64 PAN IDs
 static uint8_t  sPanIdCount = 0; // Current count of stored PAN IDs
 
 static int8_t GetTransmitPowerForChannel(uint8_t aChannel)
@@ -285,7 +285,7 @@ static void txAckProcessSecurity(uint8_t *aAckFrame, uint16_t panId)
     otEXPECT(otMacFrameIsKeyIdMode1(&ackFrame) && keyId != 0);
 
     // Select PAN index from stored map
-    for (uint8_t i = 0; i < kMaxPanKeys; i++)
+    for (uint8_t i = 0; i < sMaxPanKeys; i++)
     {
         if (sPanIdKeyMaterials[i].panId == panId)
         {
